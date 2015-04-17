@@ -558,6 +558,7 @@ type ContainerStats struct {
 
 // uses a different struct to unmarshal to when we're calling the stats endpoint
 func decodeStats(r io.Reader, stats chan ContainerStats) error {
+	defer close(stats)
 	dec := json.NewDecoder(r)
 	for {
 		var m ContainerStats
@@ -577,13 +578,15 @@ func decodeStats(r io.Reader, stats chan ContainerStats) error {
 // StatsContainer gets container stats based on resource usage
 //
 // See http://goo.gl/eY5NRI for more details.
-func (c *Client) StatsContainer(id string, stats chan<- ContainerStats) error {
+// Changed according the https://github.com/fsouza/go-dockerclient/pull/232
+func (c *Client) StatsContainer(id string) (chan<- ContainerStats, error) {
 	reader, writer := io.Pipe()
+	stats := make(chan ContainerStats)
 	go decodeStats(reader, stats)
 	if err := c.stream("GET", fmt.Sprintf("/containers/%s/stats", id), true, true, nil, nil, writer, nil); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return stats, nil
 }
 
 // KillContainerOptions represents the set of options that can be used in a
