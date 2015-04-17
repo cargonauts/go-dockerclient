@@ -90,6 +90,7 @@ func (p Port) Proto() string {
 type State struct {
 	Running    bool      `json:"Running,omitempty" yaml:"Running,omitempty"`
 	Paused     bool      `json:"Paused,omitempty" yaml:"Paused,omitempty"`
+	Restarting bool      `json:"Restarting,omitempty" yaml:"Restarting,omitempty"`
 	OOMKilled  bool      `json:"OOMKilled,omitempty" yaml:"OOMKilled,omitempty"`
 	Pid        int       `json:"Pid,omitempty" yaml:"Pid,omitempty"`
 	ExitCode   int       `json:"ExitCode,omitempty" yaml:"ExitCode,omitempty"`
@@ -166,7 +167,7 @@ func parsePort(rawPort string) (int, error) {
 }
 
 // Config is the list of configuration options used when creating a container.
-// Config does not the options that are specific to starting a container on a
+// Config does not contain the options that are specific to starting a container on a
 // given host.  Those are contained in HostConfig
 type Config struct {
 	Hostname        string              `json:"Hostname,omitempty" yaml:"Hostname,omitempty"`
@@ -195,6 +196,24 @@ type Config struct {
 	NetworkDisabled bool                `json:"NetworkDisabled,omitempty" yaml:"NetworkDisabled,omitempty"`
 	SecurityOpts    []string            `json:"SecurityOpts,omitempty" yaml:"SecurityOpts,omitempty"`
 	OnBuild         []string            `json:"OnBuild,omitempty" yaml:"OnBuild,omitempty"`
+	Labels          map[string]string   `json:"Labels,omitempty" yaml:"Labels,omitempty"`
+}
+
+// LogConfig defines the log driver type and the configuration for it.
+type LogConfig struct {
+	Type   string            `json:"Type,omitempty" yaml:"Type,omitempty"`
+	Config map[string]string `json:"Config,omitempty" yaml:"Config,omitempty"`
+}
+
+// SwarmNode containers information about which Swarm node the container is on
+type SwarmNode struct {
+	ID     string            `json:"ID,omitempty" yaml:"ID,omitempty"`
+	IP     string            `json:"IP,omitempty" yaml:"IP,omitempty"`
+	Addr   string            `json:"Addr,omitempty" yaml:"Addr,omitempty"`
+	Name   string            `json:"Name,omitempty" yaml:"Name,omitempty"`
+	CPUs   int64             `json:"CPUs,omitempty" yaml:"CPUs,omitempty"`
+	Memory int64             `json:"Memory,omitempty" yaml:"Memory,omitempty"`
+	Labels map[string]string `json:"Labels,omitempty" yaml:"Labels,omitempty"`
 }
 
 // Container is the type encompasing everything about a container - its config,
@@ -211,6 +230,8 @@ type Container struct {
 	State  State   `json:"State,omitempty" yaml:"State,omitempty"`
 	Image  string  `json:"Image,omitempty" yaml:"Image,omitempty"`
 
+	Node *SwarmNode `json:"Node,omitempty" yaml:"Node,omitempty"`
+
 	NetworkSettings *NetworkSettings `json:"NetworkSettings,omitempty" yaml:"NetworkSettings,omitempty"`
 
 	SysInitPath    string `json:"SysInitPath,omitempty" yaml:"SysInitPath,omitempty"`
@@ -224,6 +245,27 @@ type Container struct {
 	VolumesRW  map[string]bool   `json:"VolumesRW,omitempty" yaml:"VolumesRW,omitempty"`
 	HostConfig *HostConfig       `json:"HostConfig,omitempty" yaml:"HostConfig,omitempty"`
 	ExecIDs    []string          `json:"ExecIDs,omitempty" yaml:"ExecIDs,omitempty"`
+
+	AppArmorProfile string `json:"AppArmorProfile,omitempty" yaml:"AppArmorProfile,omitempty"`
+}
+
+// RenameContainerOptions specify parameters to the RenameContainer function.
+//
+// See http://goo.gl/L00hoj for more details.
+type RenameContainerOptions struct {
+	// ID of container to rename
+	ID string `qs:"-"`
+
+	// New name
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+}
+
+// RenameContainer updates and existing containers name
+//
+// See http://goo.gl/L00hoj for more details.
+func (c *Client) RenameContainer(opts RenameContainerOptions) error {
+	_, _, err := c.do("POST", fmt.Sprintf("/containers/"+opts.ID+"/rename?%s", queryString(opts)), nil, false)
+	return err
 }
 
 // InspectContainer returns information about a container by its ID.
@@ -344,6 +386,14 @@ func NeverRestart() RestartPolicy {
 	return RestartPolicy{Name: "no"}
 }
 
+// Device represents a device mapping between the Docker host and the
+// container.
+type Device struct {
+	PathOnHost        string `json:"PathOnHost,omitempty" yaml:"PathOnHost,omitempty"`
+	PathInContainer   string `json:"PathInContainer,omitempty" yaml:"PathInContainer,omitempty"`
+	CgroupPermissions string `json:"CgroupPermissions,omitempty" yaml:"CgroupPermissions,omitempty"`
+}
+
 // HostConfig contains the container options related to starting a container on
 // a given host
 type HostConfig struct {
@@ -362,7 +412,12 @@ type HostConfig struct {
 	VolumesFrom     []string               `json:"VolumesFrom,omitempty" yaml:"VolumesFrom,omitempty"`
 	NetworkMode     string                 `json:"NetworkMode,omitempty" yaml:"NetworkMode,omitempty"`
 	IpcMode         string                 `json:"IpcMode,omitempty" yaml:"IpcMode,omitempty"`
+	PidMode         string                 `json:"PidMode,omitempty" yaml:"PidMode,omitempty"`
 	RestartPolicy   RestartPolicy          `json:"RestartPolicy,omitempty" yaml:"RestartPolicy,omitempty"`
+	Devices         []Device               `json:"Devices,omitempty" yaml:"Devices,omitempty"`
+	LogConfig       LogConfig              `json:"LogConfig,omitempty" yaml:"LogConfig,omitempty"`
+	ReadonlyRootfs  bool                   `json:"ReadonlyRootfs,omitempty" yaml:"ReadonlyRootfs,omitempty"`
+	SecurityOpt     []string               `json:"SecurityOpt,omitempty" yaml:"SecurityOpt,omitempty"`
 }
 
 // StartContainer starts a container, returning an error in case of failure.
@@ -372,7 +427,7 @@ func (c *Client) StartContainer(id string, hostConfig *HostConfig) error {
 	path := "/containers/" + id + "/start"
 	_, status, err := c.do("POST", path, hostConfig, true)
 	if status == http.StatusNotFound {
-		return &NoSuchContainer{ID: id}
+		return &NoSuchContainer{ID: id, Err: err}
 	}
 	if status == http.StatusNotModified {
 		return &ContainerAlreadyRunning{ID: id}
@@ -841,10 +896,14 @@ func (c *Client) ExportContainer(opts ExportContainerOptions) error {
 
 // NoSuchContainer is the error returned when a given container does not exist.
 type NoSuchContainer struct {
-	ID string
+	ID  string
+	Err error
 }
 
 func (err *NoSuchContainer) Error() string {
+	if err.Err != nil {
+		return err.Err.Error()
+	}
 	return "No such container: " + err.ID
 }
 

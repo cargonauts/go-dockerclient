@@ -143,7 +143,7 @@ func NewClient(endpoint string) (*Client, error) {
 // server endpoint, key and certificates . It will use the latest remote API version
 // available in the server.
 func NewTLSClient(endpoint string, cert, key, ca string) (*Client, error) {
-	client, err := NewVersionnedTLSClient(endpoint, cert, key, ca, "")
+	client, err := NewVersionedTLSClient(endpoint, cert, key, ca, "")
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func NewTLSClient(endpoint string, cert, key, ca string) (*Client, error) {
 // NewVersionedClient returns a Client instance ready for communication with
 // the given server endpoint, using a specific remote API version.
 func NewVersionedClient(endpoint string, apiVersionString string) (*Client, error) {
-	u, err := parseEndpoint(endpoint)
+	u, err := parseEndpoint(endpoint, false)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func NewVersionnedTLSClient(endpoint string, cert, key, ca, apiVersionString str
 // NewVersionedTLSClient returns a Client instance ready for TLS communications with the givens
 // server endpoint, key and certificates, using a specific remote API version.
 func NewVersionedTLSClient(endpoint string, cert, key, ca, apiVersionString string) (*Client, error) {
-	u, err := parseEndpoint(endpoint)
+	u, err := parseEndpoint(endpoint, true)
 	if err != nil {
 		return nil, err
 	}
@@ -605,10 +605,13 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("API error (%d): %s", e.Status, e.Message)
 }
 
-func parseEndpoint(endpoint string) (*url.URL, error) {
+func parseEndpoint(endpoint string, tls bool) (*url.URL, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, ErrInvalidEndpoint
+	}
+	if tls {
+		u.Scheme = "https"
 	}
 	if u.Scheme == "tcp" {
 		_, port, err := net.SplitHostPort(u.Host)
